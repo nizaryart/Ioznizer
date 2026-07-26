@@ -76,13 +76,16 @@ def main():
                 "conversation_history": []
             }
         else:
-            print(f"[+] Using API key: {api_key[:20]}...")
+            # Only the prefix and length are shown: enough to tell two keys
+            # apart when debugging, not enough to reconstruct one from a log.
+            print(f"[+] Using API key: {api_key[:8]}...{'*' * 8} ({len(api_key)} chars)")
             print(f"[+] Model: {model}")
             try:
                 analysis_results = analyze_sample(
                     extractor.out_dir,
                     api_key=api_key,
-                    model=model
+                    model=model,
+                    max_iterations=Config.MAX_ANALYSIS_ITERATIONS
                 )
             except ValueError as e:
                 # Configuration errors (data policy, etc.)

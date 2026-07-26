@@ -9,15 +9,6 @@ from typing import Dict, List, Optional, Any
 import openai
 from openai import OpenAI
 
-# Try to import config for default API key
-try:
-    import sys
-    from pathlib import Path
-    sys.path.insert(0, str(Path(__file__).parent.parent))
-    from config import Config
-    DEFAULT_API_KEY = Config.DEFAULT_API_KEY
-except ImportError:
-    DEFAULT_API_KEY = None
 
 
 class OpenRouterClient:
@@ -31,7 +22,7 @@ class OpenRouterClient:
             api_key: OpenRouter API key (defaults to OPENROUTER_API_KEY env var or config default)
             model: Model identifier (default: openai/gpt-oss-120b:free)
         """
-        self.api_key = api_key or os.getenv("OPENROUTER_API_KEY") or DEFAULT_API_KEY
+        self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
         if not self.api_key:
             raise ValueError(
                 "OpenRouter API key not found. "
@@ -125,7 +116,10 @@ class OpenRouterClient:
                         "index": choice.index,
                         "message": {
                             "role": choice.message.role,
-                            "content": choice.message.content,
+                            # Normalised to a string: the API returns null
+                            # content whenever the model replies with tool
+                            # calls instead of prose.
+                            "content": choice.message.content or "",
                         },
                         "finish_reason": choice.finish_reason,
                     }

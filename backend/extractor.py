@@ -1,43 +1,63 @@
+"""
+Static extraction backend.
+
+Runs binutils against an ELF sample and writes the raw artifacts that the
+analysis agent later queries through its tools.
+"""
+
 import subprocess
 from pathlib import Path
 import sys
 import shutil
 import re
 
+try:
+    from .decompiler import get_decompiler, DecompilerError
+except ImportError:  # direct execution: python3 backend/extractor.py
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from backend.decompiler import get_decompiler, DecompilerError
+
+
+class CommandError(RuntimeError):
+    """A required external command failed."""
+
 
 class StaticExtractor:
     def __init__(self, sample_path: str, output_dir=None):
         """
         Initialize the static extractor.
-        
+
         Args:
             sample_path: Path to the ELF sample file
             output_dir: Output directory for analysis files (default: analysis/ at project root)
         """
         self.sample = Path(sample_path).resolve()
-        
+
         # Set default output directory to analysis/ at project root
         if output_dir is None:
             project_root = Path(__file__).resolve().parent.parent
             self.out_dir = project_root / "analysis"
         else:
             self.out_dir = Path(output_dir)
-        
+
         self.out_dir.mkdir(exist_ok=True, parents=True)
-        
+
         if not self.sample.exists():
             raise FileNotFoundError(f"Sample not found: {self.sample}")
-        
+
         # Validate it's an ELF file
         if not self._is_elf_file():
             raise ValueError(f"File is not a valid ELF file: {self.sample}")
-        
+
         # Check required tools
         self._check_required_tools()
-        
+
         # Detect architecture
         self.architecture = self._detect_architecture()
-        
+
+        # Populated by extract_decompilation()
+        self.decompiler = None
+
     def _is_elf_file(self):
         """Check if file is a valid ELF file."""
         try:
@@ -46,75 +66,73 @@ class StaticExtractor:
                 return magic == b'\x7fELF'
         except Exception:
             return False
-    
+
     def _check_required_tools(self):
         """Check if required tools are available."""
         required_tools = ['readelf', 'objdump', 'strings']
         missing_tools = []
-        
+
         for tool in required_tools:
             if not shutil.which(tool):
                 missing_tools.append(tool)
-        
+
         if missing_tools:
             raise RuntimeError(
                 f"Required tools not found: {', '.join(missing_tools)}\n"
                 f"Please install binutils package (apt-get install binutils)"
             )
-    
+
     def _detect_architecture(self):
         """
         Detect the architecture of the ELF file.
-        Returns architecture string (e.g., 'arm', 'i386', 'x86-64', 'mips')
+        Returns architecture string (e.g., 'arm', 'i386', 'i386:x86-64', 'mips')
         """
         try:
-            # Use readelf to get machine type
-            result = subprocess.check_output(
-                f"readelf -h {self.sample}",
-                shell=True,
-                stderr=subprocess.STDOUT
-            )
-            output = result.decode(errors="ignore")
-            
-            # Parse machine type from readelf output
-            machine_match = re.search(r'Machine:\s+(\S+)', output)
-            if machine_match:
-                machine = machine_match.group(1).lower()
-                
-                # Map to objdump architecture flags
-                arch_map = {
-                    'arm': 'arm',
-                    'aarch64': 'aarch64',
-                    'intel 80386': 'i386',
-                    'advanced micro devices x86-64': 'i386:x86-64',
-                    'x86-64': 'i386:x86-64',
-                    'mips': 'mips',
-                    'mips r3000': 'mips',
-                    'powerpc': 'powerpc',
-                    'sparc': 'sparc',
-                }
-                
-                for key, value in arch_map.items():
-                    if key in machine:
-                        return value
-                
-                # Try to extract architecture from machine string
-                if 'arm' in machine:
-                    return 'arm'
-                elif 'x86' in machine or '386' in machine or 'amd64' in machine:
-                    return 'i386:x86-64' if '64' in machine else 'i386'
-                elif 'mips' in machine:
-                    return 'mips'
-            
-            # Fallback: try file command
-            result = subprocess.check_output(
-                f"file {self.sample}",
-                shell=True,
-                stderr=subprocess.STDOUT
-            )
-            file_output = result.decode(errors="ignore").lower()
-            
-            if 'arm' in file_output:
+            output = self._run(["readelf", "-h", "-W", str(self.sample)])
+        except CommandError as e:
+            print(f"[WARNING] Could not read ELF header: {e}")
+            output = ""
+
+        # Parse machine type from readelf output
+        machine_match = re.search(r'Machine:\s+(.+)', output)
+        if machine_match:
+            machine = machine_match.group(1).strip().lower()
+
+            # Map to objdump architecture flags
+            arch_map = {
+                'advanced micro devices x86-64': 'i386:x86-64',
+                'intel 80386': 'i386',
+                'aarch64': 'aarch64',
+                'x86-64': 'i386:x86-64',
+                'mips r3000': 'mips',
+                'powerpc': 'powerpc',
+                'sparc': 'sparc',
+                'arm': 'arm',
+                'mips': 'mips',
+            }
+
+            for key, value in arch_map.items():
+                if key in machine:
+                    return value
+
+            # Try to extract architecture from machine string
+            if 'arm' in machine:
+                return 'arm'
+            elif 'x86' in machine or '386' in machine or 'amd64' in machine:
+                return 'i386:x86-64' if '64' in machine else 'i386'
+            elif 'mips' in machine:
+                return 'mips'
+
+        # Fallback: try the file command
+        if shutil.which('file'):
+            try:
+                file_output = self._run(["file", "-b", str(self.sample)]).lower()
+            except CommandError:
+                file_output = ""
+
+            if 'aarch64' in file_output:
+                return 'aarch64'
+            elif 'arm' in file_output:
                 return 'arm'
             elif 'x86-64' in file_output or 'amd64' in file_output:
                 return 'i386:x86-64'
@@ -122,118 +140,171 @@ class StaticExtractor:
                 return 'i386'
             elif 'mips' in file_output:
                 return 'mips'
-            
-            return None
-        except Exception as e:
-            print(f"[WARNING] Could not detect architecture: {e}")
-            return None
-    
-    def _run(self, cmd: str):
-        """Run shell command and return decoded output."""
+
+        return None
+
+    def _run(self, cmd, timeout: int = 300):
+        """
+        Run a command and return its decoded stdout.
+
+        The command is passed as an argument list and executed without a shell,
+        so sample paths containing spaces or shell metacharacters are handled
+        literally rather than being re-parsed by /bin/sh.
+
+        Raises:
+            CommandError: if the command is missing, fails, or times out.
+        """
         try:
-            result = subprocess.check_output(
-                cmd, shell=True, stderr=subprocess.STDOUT, timeout=300
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=timeout,
+                check=True,
             )
-            return result.decode(errors="ignore")
+            return result.stdout.decode(errors="ignore")
+        except FileNotFoundError:
+            raise CommandError(f"Tool not found: {cmd[0]}")
         except subprocess.TimeoutExpired:
-            return f"[ERROR] Command timed out: {cmd}"
+            raise CommandError(f"Timed out after {timeout}s: {' '.join(cmd)}")
         except subprocess.CalledProcessError as e:
-            error_output = e.output.decode(errors="ignore") if e.output else ""
-            return f"[ERROR] Command failed: {cmd}\n{error_output}"
-        except Exception as e:
-            return f"[ERROR] {str(e)}"
-    
+            detail = (e.stderr or b"").decode(errors="ignore").strip()
+            if not detail:
+                detail = (e.stdout or b"").decode(errors="ignore").strip()
+            raise CommandError(
+                f"{cmd[0]} failed (exit {e.returncode}): {detail or 'no output'}"
+            )
+
     def extract_metadata(self):
         """Extract ELF metadata using readelf."""
-        output = self._run(f"readelf -a {self.sample}")
+        output = self._run(["readelf", "-a", "-W", str(self.sample)])
         (self.out_dir / "metadata.txt").write_text(output)
         return output
-    
+
     def extract_strings(self):
         """Extract strings from the binary."""
-        output = self._run(f"strings -a {self.sample}")
+        output = self._run(["strings", "-a", str(self.sample)])
         (self.out_dir / "strings.txt").write_text(output)
         return output
-    
+
     def extract_symbols(self):
-        """Extract symbols and imports using readelf and objdump."""
-        # Get symbols from readelf
-        symbols_output = self._run(f"readelf -s {self.sample}")
-        
-        # Get headers and imports from objdump
-        headers_output = self._run(f"objdump -x {self.sample}")
-        
-        # Combine outputs
-        output = f"=== SYMBOLS (readelf -s) ===\n{symbols_output}\n\n"
-        output += f"=== HEADERS & IMPORTS (objdump -x) ===\n{headers_output}"
-        
+        """
+        Extract symbols, imports and exports.
+
+        `readelf -s -W` is the authoritative source here: it dumps both .dynsym
+        and .symtab, and -W prevents readelf from truncating long symbol names
+        (without it, __libc_start_main is emitted as "_[...]"). The Ndx column
+        distinguishes imports (UND) from defined exports, which is what the
+        get_imports / get_exports tools parse.
+        """
+        symbols_output = self._run(["readelf", "-s", "-W", str(self.sample)])
+
+        # objdump -x adds section/segment layout and relocation context. It does
+        # not emit a dynamic symbol table (that requires -T), so it is kept for
+        # context only and is not parsed for imports.
+        try:
+            headers_output = self._run(["objdump", "-x", str(self.sample)])
+        except CommandError as e:
+            headers_output = f"[unavailable] {e}"
+
+        output = f"=== SYMBOLS (readelf -s -W) ===\n{symbols_output}\n\n"
+        output += f"=== HEADERS & SECTIONS (objdump -x) ===\n{headers_output}"
+
         (self.out_dir / "symbols.txt").write_text(output)
         return output
-    
+
     def extract_disassembly(self):
         """
         Extract disassembly using objdump with architecture-specific flags.
-        LLM can later request specific addresses.
+        The agent can later request specific addresses or functions.
         """
-        # Build objdump command with architecture flag if detected
+        base = ["objdump", "-d", str(self.sample)]
+        attempts = []
+
         if self.architecture:
-            # Try architecture-specific disassembly first
-            cmd = f"objdump -d -m {self.architecture} {self.sample}"
-            output = self._run(cmd)
-            
-            # If that fails, try without architecture flag
-            if "[ERROR]" in output or "can't disassemble" in output.lower():
-                print(f"[WARNING] Architecture-specific disassembly failed, trying generic...")
-                cmd = f"objdump -d {self.sample}"
+            attempts.append((self.architecture, ["objdump", "-d", "-m", self.architecture, str(self.sample)]))
+        attempts.append((None, base))
+
+        # Last resort: probe common architectures
+        if not self.architecture:
+            for arch in ['i386:x86-64', 'i386', 'arm', 'aarch64']:
+                attempts.append((arch, ["objdump", "-d", "-m", arch, str(self.sample)]))
+
+        last_error = None
+        for arch, cmd in attempts:
+            try:
                 output = self._run(cmd)
-        else:
-            # No architecture detected, try generic
-            cmd = f"objdump -d {self.sample}"
-            output = self._run(cmd)
-            
-            # If generic fails, try with common architectures
-            if "[ERROR]" in output or "can't disassemble" in output.lower():
-                print(f"[WARNING] Generic disassembly failed, trying common architectures...")
-                for arch in ['i386:x86-64', 'i386', 'arm', 'aarch64']:
-                    cmd = f"objdump -d -m {arch} {self.sample}"
-                    test_output = self._run(cmd)
-                    if "[ERROR]" not in test_output and "can't disassemble" not in test_output.lower():
-                        output = test_output
-                        self.architecture = arch
-                        print(f"[+] Found working architecture: {arch}")
-                        break
-        
-        (self.out_dir / "disasm.txt").write_text(output)
-        return output
-    
+            except CommandError as e:
+                last_error = e
+                if arch:
+                    print(f"[WARNING] Disassembly with -m {arch} failed, trying next option...")
+                continue
+
+            if arch and arch != self.architecture:
+                print(f"[+] Found working architecture: {arch}")
+                self.architecture = arch
+
+            (self.out_dir / "disasm.txt").write_text(output)
+            return output
+
+        raise CommandError(f"Disassembly failed for all attempted architectures: {last_error}")
+
     def extract_decompilation(self):
-        """Placeholder for decompilation via Ghidra headless."""
-        output = "[TODO] Decompilation via Ghidra headless\n"
-        output += f"Architecture detected: {self.architecture or 'unknown'}\n"
-        (self.out_dir / "decomp.txt").write_text(output)
-        return output
-    
+        """
+        Decompile the sample to pseudo-C.
+
+        Uses Ghidra when available and falls back to radare2, then to an
+        explicit "no decompiler installed" note. A decompiler failure is
+        reported but does not abort extraction: disassembly alone is still a
+        usable basis for analysis.
+        """
+        out_file = self.out_dir / "decomp.txt"
+        backend = get_decompiler()
+        self.decompiler = backend.name
+
+        print(f"[+] Decompiler backend: {backend.name}")
+
+        try:
+            return backend.decompile(self.sample, out_file)
+        except DecompilerError as e:
+            print(f"[WARNING] Decompilation failed: {e}")
+            output = (
+                f"// Decompilation failed using backend '{backend.name}'.\n"
+                f"// {e}\n"
+                f"//\n"
+                f"// Disassembly is still available via the disasm section.\n"
+            )
+            out_file.write_text(output)
+            self.decompiler = f"{backend.name} (failed)"
+            return output
+
     def run_all(self):
-        """Run all extraction methods."""
+        """
+        Run all extraction methods.
+
+        Extraction failures raise rather than being written into the analysis
+        files: a captured error string would otherwise be handed to the agent
+        as if it were binary evidence.
+        """
         print(f"[+] Starting extraction for: {self.sample.name}")
         print(f"[+] Architecture detected: {self.architecture or 'unknown'}")
         print(f"[+] Output directory: {self.out_dir}")
-        
+
         print("[+] Extracting metadata...")
         self.extract_metadata()
-        
+
         print("[+] Extracting strings...")
         self.extract_strings()
-        
+
         print("[+] Extracting symbols & imports...")
         self.extract_symbols()
-        
+
         print("[+] Extracting disassembly...")
         self.extract_disassembly()
-        
-        print("[+] Extracting decompilation (placeholder)...")
+
+        print("[+] Decompiling...")
         self.extract_decompilation()
-        
+
         print("[+] Extraction complete.")
         print(f"[+] Analysis files saved to: {self.out_dir}")
 
@@ -242,9 +313,9 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: python3 extractor.py <sample_path>")
         sys.exit(1)
-    
+
     sample_path = sys.argv[1]
-    
+
     try:
         print(f"[+] Running static extraction for: {sample_path}")
         extractor = StaticExtractor(sample_path)

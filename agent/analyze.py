@@ -93,16 +93,27 @@ WORKFLOW:
 5. When you have a comprehensive understanding, provide your final analysis as structured JSON
 
 AVAILABLE TOOLS (use when you need more information):
+- list_functions: List functions recovered by the decompiler, with addresses
+- decompile_function: Get decompiled pseudo-C for one function (most informative tool)
 - read_section: Read specific sections from analysis files (metadata, strings, symbols, disasm, decomp)
-- disassemble_address: Get disassembly for specific addresses or functions
+- disassemble_address: Get raw disassembly for specific addresses or functions
 - search_strings: Search for suspicious strings or patterns
 - analyze_symbol: Get detailed information about symbols
 - get_imports: List imported functions and libraries
 - get_exports: List exported functions
 
 TOOL USAGE STRATEGY:
+- Work like a reverse engineer: find a lead, then read the code behind it
+- Prefer decompile_function over disassemble_address. Pseudo-C already resolves
+  library calls, control flow and string references, so it yields far more
+  reliable conclusions than reading raw instructions
+- A typical investigation: search_strings finds a suspicious literal ->
+  list_functions or the disassembly locates the function referencing it ->
+  decompile_function reveals what that function actually does
+- Stripped binaries have synthetic names such as FUN_0804a330; this is normal,
+  and you should still decompile them
+- Cite concrete evidence (function name, address) for every behaviour you report
 - Use tools efficiently - avoid redundant queries
-- Focus on hypothesis-driven investigation
 - Extract ALL key findings from tool results into structured fields
 - Never leave arrays empty when findings are confirmed
 
@@ -218,6 +229,57 @@ AVOID:
 
 Be thorough, use tools as needed, and provide your final analysis as valid JSON."""
     
+    @staticmethod
+    def _is_report_json(text: str) -> bool:
+        """
+        Decide whether a response is the final report.
+
+        A response counts only if it parses as JSON and carries the report's
+        top-level keys. Testing for length or for the presence of a keyword
+        accepts intermediate commentary, which ends the run with nothing to
+        report.
+        """
+        start = text.find("{")
+        if start == -1:
+            return False
+
+        depth = 0
+        in_string = False
+        escape = False
+
+        for i in range(start, len(text)):
+            char = text[i]
+
+            if escape:
+                escape = False
+                continue
+            if char == "\\":
+                escape = True
+                continue
+            if char == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        # strict=False for the same reason as the report
+                        # generator: models emit literal newlines in strings.
+                        parsed = json.loads(text[start:i + 1], strict=False)
+                    except json.JSONDecodeError:
+                        return False
+                    return (
+                        isinstance(parsed, dict)
+                        and "executive_summary" in parsed
+                    )
+
+        return False
+
     def _chunk_content(self, content: str, max_length: int = 5000) -> List[str]:
         """Chunk large content into smaller pieces."""
         if len(content) <= max_length:
@@ -296,18 +358,47 @@ Extract ALL findings from tool results. Never leave arrays empty when findings a
         
         iteration = 0
         final_analysis = None
-        
+
+        # Convergence tracking. Without these the agent can spend every
+        # iteration on tool calls and never be asked for its verdict, which
+        # yields a run that did useful investigation but reported nothing.
+        consecutive_empty = 0
+        seen_tool_calls = set()
+        forced_final = False
+
         while iteration < max_iterations:
             iteration += 1
-            print(f"[ITERATION {iteration}] Sending request to LLM...")
-            
+
+            # Reserve the last iterations for the answer itself: withdraw the
+            # tools and require the JSON verdict. Also triggered when the model
+            # stalls, returning neither content nor tool calls.
+            force_final = (
+                iteration >= max_iterations - 1
+                or consecutive_empty >= 3
+            )
+
+            if force_final and not forced_final:
+                forced_final = True
+                self.conversation_history.append({
+                    "role": "user",
+                    "content": (
+                        "Stop investigating and report now. Output ONLY the final "
+                        "JSON object described in the system prompt, populated from "
+                        "everything you have already found. No tool calls, no prose, "
+                        "no markdown fences. Begin your response with '{'."
+                    )
+                })
+                print(f"[ITERATION {iteration}] Requesting final report (tools withdrawn)...")
+            else:
+                print(f"[ITERATION {iteration}] Sending request to LLM...")
+
             try:
                 # Get LLM response
                 print(f"[DEBUG] Sending {len(self.conversation_history)} messages to LLM...")
                 response = self.client.chat_completion(
                     messages=self.conversation_history,
-                    tools=self.tools_schema,
-                    tool_choice="auto",
+                    tools=None if force_final else self.tools_schema,
+                    tool_choice=None if force_final else "auto",
                     temperature=0.7,
                     max_tokens=4000  # Increased for complete JSON reports
                 )
@@ -320,7 +411,7 @@ Extract ALL findings from tool results. Never leave arrays empty when findings a
                 message = choice["message"]
                 
                 # Debug output
-                content_len = len(message.get('content', ''))
+                content_len = len(message.get("content") or "")
                 tool_calls = message.get('tool_calls', [])
                 has_reasoning = "reasoning_details" in message
                 print(f"[DEBUG] Response details:")
@@ -328,12 +419,13 @@ Extract ALL findings from tool results. Never leave arrays empty when findings a
                 print(f"  - Tool calls: {len(tool_calls) if tool_calls else 0}")
                 print(f"  - Has reasoning_details: {has_reasoning}")
                 if content_len > 0:
-                    print(f"  - Content preview: {message.get('content', '')[:100]}...")
+                    preview_text = (message.get("content") or "")[:100]
+                    print(f"  - Content preview: {preview_text}...")
                 
                 # Add assistant message to history (preserve reasoning_details as per OpenRouter example)
                 assistant_msg = {
                     "role": "assistant",
-                    "content": message.get("content", ""),
+                    "content": message.get("content") or "",
                 }
                 
                 # Preserve reasoning_details if present (as per OpenRouter official example)
@@ -345,9 +437,10 @@ Extract ALL findings from tool results. Never leave arrays empty when findings a
                 tool_calls = message.get("tool_calls", [])
                 
                 if tool_calls:
+                    consecutive_empty = 0
                     print(f"[+] LLM requested {len(tool_calls)} tool(s) - executing...")
                     tool_messages = []
-                    
+
                     for tool_call in tool_calls:
                         tool_id = tool_call["id"]
                         tool_name = tool_call["function"]["name"]
@@ -387,7 +480,19 @@ Extract ALL findings from tool results. Never leave arrays empty when findings a
                             tool_response = f"Tool {tool_name} executed successfully:\n{result_content}"
                         else:
                             tool_response = f"Tool {tool_name} failed: {tool_result.get('error', 'Unknown error')}"
-                        
+
+                        # Repeated identical calls are the main way runs burn
+                        # their iteration budget without gaining information.
+                        signature = f"{tool_name}:{json.dumps(tool_args, sort_keys=True)}"
+                        if signature in seen_tool_calls:
+                            tool_response = (
+                                "NOTE: you have already made this exact call and "
+                                "received this result. Do not repeat it. Move on to a "
+                                "different question or produce your final JSON report.\n\n"
+                                + tool_response
+                            )
+                        seen_tool_calls.add(signature)
+
                         tool_messages.append({
                             "role": "tool",
                             "tool_call_id": tool_id,
@@ -422,56 +527,40 @@ Extract ALL findings from tool results. Never leave arrays empty when findings a
                     # No tool calls - this might be the final analysis
                     self.conversation_history.append(assistant_msg)
                     
-                    content = message.get("content", "")
+                    content = message.get("content") or ""
                     if content:
+                        consecutive_empty = 0
                         print("[+] LLM provided analysis:")
-                        # Check if it contains JSON
-                        has_json = "{" in content and "}" in content
-                        if has_json:
-                            print("[+] Analysis contains structured JSON format")
-                        # Show preview
                         preview = content[:500] + "..." if len(content) > 500 else content
                         print(preview)
                         print()
-                        
-                        # Check if this looks like a final conclusion
-                        # Look for structured analysis markers or JSON
-                        has_structure = any(keyword in content.lower() for keyword in 
-                                          ["executive_summary", "executive summary", "technical_analysis", 
-                                           "indicators_of_compromise", "threat_intelligence", 
-                                           "risk assessment", "recommendations", "conclusion", "final analysis"])
-                        
-                        if has_structure or has_json or len(content) > 500:
-                            # This looks like a comprehensive analysis
+
+                        # Acceptance requires a parseable report, not merely a
+                        # long reply. Length alone previously let intermediate
+                        # prose end the run, producing an empty report.
+                        if self._is_report_json(content):
                             final_analysis = content
-                            print("[+] Final comprehensive analysis received.")
+                            print("[+] Final report received (valid JSON).")
                             break
-                        else:
-                            # Might be intermediate reasoning, continue
-                            print("[+] LLM provided intermediate analysis, continuing...")
+
+                        if forced_final:
+                            # The model was explicitly asked for the report and
+                            # this is what it gave. Keep it so the raw response
+                            # survives into the report for a human to read.
+                            final_analysis = content
+                            print("[WARNING] Final response was not valid JSON; keeping raw text.")
+                            break
+
+                        print("[+] Response is not a complete report yet, continuing...")
                     else:
-                        print("[WARNING] Empty response from LLM, continuing...")
+                        consecutive_empty += 1
+                        print(f"[WARNING] Empty response from LLM "
+                              f"({consecutive_empty} in a row)")
                 
-                # Check finish reason
-                finish_reason = choice.get("finish_reason")
-                
-                # If finish_reason is "stop" and we have content, it's likely final
-                if finish_reason == "stop" and not tool_calls:
-                    content = message.get("content", "")
-                    if content and len(content) > 100:
-                        final_analysis = content
-                        print("[+] Received final response (finish_reason=stop with content).")
-                        break
-                
-                # Safety check: if we've done many iterations, check if we should stop
-                if iteration >= 10:
-                    # After 10 iterations, if we have substantial content, use it
-                    content = message.get("content", "")
-                    if content and len(content) > 200 and not tool_calls:
-                        final_analysis = content
-                        print(f"[+] Reached iteration limit ({iteration}), using current analysis.")
-                        break
-                
+                # Termination is decided above, by whether a parseable report was
+                # produced. Length-based heuristics previously accepted any long
+                # reply as final and ended runs before the report existed.
+
             except ValueError as e:
                 # User-friendly configuration errors
                 error_msg = str(e)
@@ -529,20 +618,22 @@ Extract ALL findings from tool results. Never leave arrays empty when findings a
 
 
 def analyze_sample(analysis_dir: Path, api_key: Optional[str] = None,
-                  model: str = "openai/gpt-oss-120b:free") -> Dict[str, Any]:
+                  model: str = "openai/gpt-oss-120b:free",
+                  max_iterations: int = 20) -> Dict[str, Any]:
     """
     Analyze a malware sample.
-    
+
     Args:
         analysis_dir: Path to analysis directory
         api_key: OpenRouter API key
         model: Model identifier
-    
+        max_iterations: Agent loop ceiling (MAX_ANALYSIS_ITERATIONS)
+
     Returns:
         Analysis results dict
     """
     analyzer = MalwareAnalyzer(analysis_dir, api_key=api_key, model=model)
-    return analyzer.analyze()
+    return analyzer.analyze(max_iterations=max_iterations)
 
 
 if __name__ == "__main__":

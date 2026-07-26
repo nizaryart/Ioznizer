@@ -1,2 +1,0 @@
-[TODO] Decompilation via Ghidra headless
-Architecture detected: i386:x86-64

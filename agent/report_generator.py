@@ -182,7 +182,7 @@ class ReportGenerator:
         if json_match:
             try:
                 json_str = json_match.group(0)
-                return json.loads(json_str)
+                return json.loads(json_str, strict=False)
             except json.JSONDecodeError as e:
                 print(f"[DEBUG] Failed to parse JSON (simple regex): {e}")
         
@@ -227,7 +227,11 @@ class ReportGenerator:
                         # Found complete JSON object
                         json_str = text[start_idx:i+1]
                         try:
-                            return json.loads(json_str)
+                            # strict=False tolerates literal newlines and tabs
+                            # inside strings. Models emit them routinely in
+                            # multi-line values such as YARA rule snippets, and
+                            # rejecting those discards an otherwise valid report.
+                            return json.loads(json_str, strict=False)
                         except json.JSONDecodeError as e:
                             print(f"[DEBUG] Failed to parse balanced JSON: {e}")
                             # Try to find next complete JSON object
@@ -256,34 +260,31 @@ class ReportGenerator:
     
     def _parse_executive_summary(self, text: str) -> Dict[str, Any]:
         """Parse executive summary from text."""
+        # This path runs only when structured JSON could not be recovered from
+        # the model's response. It must not manufacture a verdict: a guessed
+        # classification is indistinguishable, downstream, from one the model
+        # actually reached. Previously a keyword scan here relabelled a
+        # "DDoS Flooder" analysis as "Backdoor" with an invented score of 50.
         summary = {
-            "classification": "Unknown",
+            "classification": "Unclassified - structured output could not be parsed",
             "key_capabilities": [],
-            "risk_level": "Medium",
-            "risk_score": 50,
-            "primary_evasion_techniques": []
+            "risk_level": "Unknown",
+            "risk_score": None,
+            "primary_evasion_techniques": [],
+            "extraction_status": "degraded: see raw_analysis for the model's full response",
         }
-        
-        # Extract classification
-        for classification in ["DDoS bot", "Backdoor", "Downloader", "Trojan", "Worm", "Ransomware"]:
-            if classification.lower() in text.lower():
-                summary["classification"] = classification
-                break
-        
-        # Extract risk level
-        risk_match = re.search(r'risk[:\s]+(low|medium|high|critical)', text.lower())
+
+        # Risk level is reported only when the model stated it explicitly.
+        risk_match = re.search(r'"?risk_level"?[:\s]+"?(low|medium|high|critical)', text.lower())
         if risk_match:
             summary["risk_level"] = risk_match.group(1).capitalize()
-        
-        # Extract risk score
-        score_match = re.search(r'risk[:\s]+(\d+)', text.lower())
+
+        score_match = re.search(r'"?risk_score"?[:\s]+(\d{1,3})', text.lower())
         if score_match:
-            summary["risk_score"] = int(score_match.group(1))
-        else:
-            # Map risk level to score
-            risk_scores = {"Low": 25, "Medium": 50, "High": 75, "Critical": 95}
-            summary["risk_score"] = risk_scores.get(summary["risk_level"], 50)
-        
+            score = int(score_match.group(1))
+            if 0 <= score <= 100:
+                summary["risk_score"] = score
+
         return summary
     
     def _parse_technical_analysis(self, text: str, tool_results: List[Dict]) -> Dict[str, Any]:
@@ -512,7 +513,11 @@ class ReportGenerator:
             md_lines.append("## Executive Summary")
             md_lines.append("")
             md_lines.append(f"- **Classification:** {es.get('classification', 'Unknown')}")
-            md_lines.append(f"- **Risk Level:** {es.get('risk_level', 'Unknown')} (Score: {es.get('risk_score', 0)})")
+            score = es.get('risk_score')
+            score_text = "not determined" if score is None else str(score)
+            md_lines.append(f"- **Risk Level:** {es.get('risk_level', 'Unknown')} (Score: {score_text})")
+            if es.get("extraction_status"):
+                md_lines.append(f"- **⚠ Extraction:** {es['extraction_status']}")
             md_lines.append("")
         
         # Technical Analysis

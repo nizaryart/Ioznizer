@@ -254,10 +254,12 @@ except ImportError:
 ### 3.2 API Key Configuration
 
 ```python
-# File: config.py (lines 23-24)
-DEFAULT_API_KEY = "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"
-OPENROUTER_API_KEY: Optional[str] = os.getenv("OPENROUTER_API_KEY") or DEFAULT_API_KEY
+# File: config.py
+OPENROUTER_API_KEY: Optional[str] = os.getenv("OPENROUTER_API_KEY")
 ```
+
+The key is read from the environment only. It is never hardcoded as a default:
+a key committed to a public repository is compromised the moment it is pushed.
 
 **What it does:**
 - Defines a default API key as fallback

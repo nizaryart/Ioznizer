@@ -1,0 +1,33 @@
+# Secrets — never commit
+.env
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# Editor
+*.swp
+*.swo
+*~
+
+# Generated analysis artifacts (regenerated on every run)
+analysis/
+decomp.txt
+
+# Generated reports — keep curated examples in docs/ instead
+reports/*.json
+reports/*.md
+!reports/.gitkeep
+
+# Ghidra
+*.gpr
+*.rep/
+ghidra_scripts/**/*.class
+
+# Malware samples — never publish live binaries
+samples/*.elf
+samples/*.bin
+!samples/README.md

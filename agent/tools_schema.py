@@ -118,6 +118,60 @@ TOOLS_SCHEMA = [
     {
         "type": "function",
         "function": {
+            "name": "decompile_function",
+            "description": (
+                "Get the decompiled pseudo-C for a single function. This is usually "
+                "far more informative than raw disassembly: library calls, control flow "
+                "and string references are already resolved. Prefer this over "
+                "disassemble_address when investigating what a function actually does. "
+                "For stripped binaries the decompiler assigns synthetic names such as "
+                "FUN_0804a330; use list_functions first to find candidates."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "function_name": {
+                        "type": "string",
+                        "description": "Function name, e.g. 'main' or 'FUN_0804a330'"
+                    },
+                    "address": {
+                        "type": "string",
+                        "description": "Entry point address in hex, e.g. '0x0804a330'. Used if function_name is not given."
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_functions",
+            "description": (
+                "List the functions recovered by the decompiler, with entry point "
+                "addresses. Use this to orient yourself before drilling into a "
+                "specific function, or to find functions whose names match a pattern."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Optional: only return functions whose name contains this substring (case-insensitive)"
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum number of functions to return (default: 100)",
+                        "default": 100
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_exports",
             "description": "List all exported functions. Useful for understanding what the binary exposes.",
             "parameters": {

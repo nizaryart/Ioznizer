@@ -18,10 +18,11 @@ except ImportError:
 class Config:
     """Configuration settings for the malware detector."""
     
-    # OpenRouter API settings
-    # Default API key (fallback if not in environment)
-    DEFAULT_API_KEY = "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"
-    OPENROUTER_API_KEY: Optional[str] = os.getenv("OPENROUTER_API_KEY") or DEFAULT_API_KEY
+    # OpenRouter API settings.
+    # The key is read from the environment (or a local .env) only. It is never
+    # hardcoded here: this file is committed, and a key in a public repository
+    # is compromised the moment it is pushed.
+    OPENROUTER_API_KEY: Optional[str] = os.getenv("OPENROUTER_API_KEY")
     OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "openai/gpt-oss-120b:free")
     
     # Directories
