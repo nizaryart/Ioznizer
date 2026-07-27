@@ -1,6 +1,6 @@
 """
 OpenRouter API Client for LLM integration.
-Supports openai/gpt-oss-120b:free model via OpenRouter.
+Supports nvidia/nemotron-3-ultra-550b-a55b:free model via OpenRouter.
 """
 
 import os
@@ -14,13 +14,13 @@ from openai import OpenAI
 class OpenRouterClient:
     """Client for interacting with OpenRouter API."""
     
-    def __init__(self, api_key: Optional[str] = None, model: str = "openai/gpt-oss-120b:free"):
+    def __init__(self, api_key: Optional[str] = None, model: str = "nvidia/nemotron-3-ultra-550b-a55b:free"):
         """
         Initialize OpenRouter client.
         
         Args:
             api_key: OpenRouter API key (defaults to OPENROUTER_API_KEY env var or config default)
-            model: Model identifier (default: openai/gpt-oss-120b:free)
+            model: Model identifier (default: nvidia/nemotron-3-ultra-550b-a55b:free)
         """
         self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
         if not self.api_key:

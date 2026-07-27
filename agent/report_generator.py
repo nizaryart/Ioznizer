@@ -118,6 +118,11 @@ class ReportGenerator:
         else:
             print(f"[WARNING] Could not extract JSON, falling back to text parsing")
             structured = self._parse_text_analysis(analysis_text, tool_results)
+            # Preserve the model's full response. The structured fields cannot
+            # be trusted on this path, so the raw text is the only complete
+            # record of what the analysis actually found — discarding it throws
+            # away the entire run.
+            structured["raw_analysis"] = analysis_text
         
         # Enhance with extractor info
         if extractor_info:
@@ -546,6 +551,20 @@ class ReportGenerator:
         # Footer
         md_lines.append("---")
         md_lines.append("")
+        # On the degraded path the structured sections above are largely empty,
+        # so the model's own response is the substance of the report.
+        if report_data.get("raw_analysis"):
+            md_lines.append("## Raw Model Response")
+            md_lines.append("")
+            md_lines.append("Structured extraction failed; the model's full response is reproduced below.")
+            md_lines.append("")
+            md_lines.append("```")
+            md_lines.append(report_data["raw_analysis"])
+            md_lines.append("```")
+            md_lines.append("")
+            md_lines.append("---")
+            md_lines.append("")
+
         md_lines.append("*Full structured JSON report available in the corresponding .json file*")
         
         with open(output_path, 'w', encoding='utf-8') as f:

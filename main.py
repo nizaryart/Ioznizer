@@ -85,7 +85,9 @@ def main():
                     extractor.out_dir,
                     api_key=api_key,
                     model=model,
-                    max_iterations=Config.MAX_ANALYSIS_ITERATIONS
+                    max_iterations=Config.MAX_ANALYSIS_ITERATIONS,
+                    temperature=Config.LLM_TEMPERATURE,
+                    max_tokens=Config.LLM_MAX_TOKENS
                 )
             except ValueError as e:
                 # Configuration errors (data policy, etc.)

@@ -23,7 +23,7 @@ class Config:
     # hardcoded here: this file is committed, and a key in a public repository
     # is compromised the moment it is pushed.
     OPENROUTER_API_KEY: Optional[str] = os.getenv("OPENROUTER_API_KEY")
-    OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "openai/gpt-oss-120b:free")
+    OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free")
     
     # Directories
     PROJECT_ROOT: Path = Path(__file__).parent
@@ -34,7 +34,9 @@ class Config:
     # Analysis settings
     MAX_ANALYSIS_ITERATIONS: int = int(os.getenv("MAX_ANALYSIS_ITERATIONS", "20"))
     LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.7"))
-    LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "2000"))
+    # The final report is a large JSON document; a low ceiling truncates it
+    # mid-object and the whole analysis is lost to a parse error.
+    LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "16000"))
     
     # Tool settings
     TOOL_RESULT_MAX_LENGTH: int = int(os.getenv("TOOL_RESULT_MAX_LENGTH", "3000"))

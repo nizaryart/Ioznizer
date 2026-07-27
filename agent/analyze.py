@@ -24,17 +24,24 @@ except ImportError:
 class MalwareAnalyzer:
     """Main agent for analyzing malware samples using LLM."""
     
-    def __init__(self, analysis_dir: Path, api_key: Optional[str] = None, 
-                 model: str = "openai/gpt-oss-120b:free"):
+    def __init__(self, analysis_dir: Path, api_key: Optional[str] = None,
+                 model: str = "nvidia/nemotron-3-ultra-550b-a55b:free",
+                 temperature: float = 0.7, max_tokens: int = 16000):
         """
         Initialize the malware analyzer.
-        
+
         Args:
             analysis_dir: Path to analysis directory with extracted files
             api_key: OpenRouter API key (optional, uses env var if not provided)
             model: Model identifier
+            temperature: Sampling temperature
+            max_tokens: Response ceiling. The final report is a large JSON
+                document, so a low value truncates it mid-object and the
+                analysis is lost to a parse error.
         """
         self.analysis_dir = Path(analysis_dir)
+        self.temperature = temperature
+        self.max_tokens = max_tokens
         self.client = OpenRouterClient(api_key=api_key, model=model)
         self.dispatcher = ToolDispatcher(self.analysis_dir)
         self.tools_schema = get_tools_schema()
@@ -399,8 +406,8 @@ Extract ALL findings from tool results. Never leave arrays empty when findings a
                     messages=self.conversation_history,
                     tools=None if force_final else self.tools_schema,
                     tool_choice=None if force_final else "auto",
-                    temperature=0.7,
-                    max_tokens=4000  # Increased for complete JSON reports
+                    temperature=self.temperature,
+                    max_tokens=self.max_tokens
                 )
                 
                 if not response.get("choices"):
@@ -618,8 +625,10 @@ Extract ALL findings from tool results. Never leave arrays empty when findings a
 
 
 def analyze_sample(analysis_dir: Path, api_key: Optional[str] = None,
-                  model: str = "openai/gpt-oss-120b:free",
-                  max_iterations: int = 20) -> Dict[str, Any]:
+                  model: str = "nvidia/nemotron-3-ultra-550b-a55b:free",
+                  max_iterations: int = 20,
+                  temperature: float = 0.7,
+                  max_tokens: int = 16000) -> Dict[str, Any]:
     """
     Analyze a malware sample.
 
@@ -632,7 +641,8 @@ def analyze_sample(analysis_dir: Path, api_key: Optional[str] = None,
     Returns:
         Analysis results dict
     """
-    analyzer = MalwareAnalyzer(analysis_dir, api_key=api_key, model=model)
+    analyzer = MalwareAnalyzer(analysis_dir, api_key=api_key, model=model,
+                               temperature=temperature, max_tokens=max_tokens)
     return analyzer.analyze(max_iterations=max_iterations)
 
 

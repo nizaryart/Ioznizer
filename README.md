@@ -89,33 +89,43 @@ parses as a schema-valid report.
 
 ## Results
 
-Two binaries, identical pipeline, no tuning between runs. Both were analysed
-with the free default model (`openai/gpt-oss-20b:free`) — see
+Two binaries, identical pipeline, no tuning between runs, using the default
+model (`nvidia/nemotron-3-ultra-550b-a55b:free`) — see
 [Choosing a model](#choosing-a-model) to run the same pipeline against a
-stronger one.
+different one.
 
 ### Sample A — stripped 32-bit ELF, unknown provenance
 
-Ghidra recovered **267 functions with zero decompilation failures** in ~47
-seconds. The model's verdict:
+Ghidra recovered **267 functions with zero decompilation failures**. The full
+run — extraction, decompilation, 13 agent iterations and report generation —
+took **3m55s**.
 
 ```
-classification : Distributed Denial of Service (DDoS) Tool / Network Flooder
-risk           : High  (85/100)
+classification : DDoS Botnet
+risk           : Critical  (95/100)
 binary         : i386, statically linked, imports: []
-capabilities   : SYN flood · UDP flood · ICMP flood · TCP ACK flood
-                 SSDP discovery · infinite execution loop
+behaviours     : 10, each with an evidence location and confidence level
 ```
 
-Findings it evidenced from the code:
+What it recovered from a binary with no symbols:
 
-- **Flood primitives** — located `[udp_flood]`, `[syn_flood]`, `[icmp_flood]` in
-  `.rodata`, then confirmed the raw-socket construction and send loops in the
-  decompiled functions behind them.
-- **Reconnaissance** — SSDP `M-SEARCH` broadcast to `255.255.255.255:1900`.
-- **Direct syscalls** — an empty import table with no `DT_NEEDED` entries, which
-  the tooling reports explicitly as a statically linked binary calling syscalls
-  directly rather than as missing data.
+- **Seven flood primitives** — UDP, UDP-plain, UDP-bypass, TCP SYN, TCP-bypass,
+  ICMP, and ACK/PSH-ACK, each tied to its `.rodata` marker and socket setup.
+  SYN flooding uses raw sockets with `IP_HDRINCL`.
+- **Hardcoded C2 — `154.6.197.37`** — plus a custom control protocol,
+  `SNQUERY: <ip>:<password>:<identifier>`.
+- **Reconnaissance** — SSDP `M-SEARCH` to `255.255.255.255:1900` and DIAL
+  service enumeration, behind a spoofed Chrome User-Agent.
+- **Host enumeration** — reads `/proc/net/tcp` to enumerate live connections;
+  SOCKS5 proxy support.
+- **Process manipulation** — a `watch_time` routine that calls `kill()` on
+  tracked PIDs.
+- **Packing indicators** — no dynamic section, no GOT, no relocations, and a
+  large `.text` (`0x17f86`) against a small `.data`/`.bss`.
+
+Mapped to ATT&CK: `T1498` / `T1498.001` (Network Denial of Service, Direct
+Network Flood), `T1046` (Network Service Discovery), `T1071.001` (Application
+Layer Protocol), `T1090.001` (Internal Proxy), `T1027` (Obfuscated Files).
 
 Independently checkable: `file` reports *ELF 32-bit LSB, Intel i386, statically
 linked, stripped*, and `readelf` confirms the empty dynamic symbol table.
@@ -230,12 +240,14 @@ rather than guessing.
 | Variable | Default | Purpose |
 |---|---|---|
 | `OPENROUTER_API_KEY` | — | Required for LLM analysis |
-| `OPENROUTER_MODEL` | `openai/gpt-oss-20b:free` | Any tool-calling model |
+| `OPENROUTER_MODEL` | `nvidia/nemotron-3-ultra-550b-a55b:free` | Any tool-calling model |
 | `GHIDRA_HOME` | auto-detected | Ghidra installation root |
 | `DECOMPILER_BACKEND` | auto | Force `ghidra`, `radare2` or `none` |
 | `DECOMPILER_TIMEOUT` | `900` | Seconds before decompilation is abandoned |
 | `IOZNIZER_SANDBOX` | `1` | Run the decompiler under `bwrap` |
 | `MAX_ANALYSIS_ITERATIONS` | `20` | Agent loop ceiling |
+| `LLM_MAX_TOKENS` | `16000` | Response ceiling; the final report is a large JSON document |
+| `LLM_TEMPERATURE` | `0.7` | Sampling temperature |
 
 ### Choosing a model
 
@@ -243,7 +255,7 @@ The model is entirely your choice — anything on OpenRouter that supports tool
 calling will drive the pipeline:
 
 ```bash
-export OPENROUTER_MODEL="openai/gpt-oss-20b:free"     # free, no cost per run
+export OPENROUTER_MODEL="nvidia/nemotron-3-ultra-550b-a55b:free"  # free, 1M context
 export OPENROUTER_MODEL="anthropic/claude-sonnet-4.5" # or any paid model
 ```
 
