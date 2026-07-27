@@ -31,3 +31,6 @@ ghidra_scripts/**/*.class
 samples/*.elf
 samples/*.bin
 !samples/README.md
+
+# Locally installed Ghidra (setup.sh --with-ghidra)
+ghidra/

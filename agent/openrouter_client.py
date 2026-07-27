@@ -179,6 +179,15 @@ class OpenRouterClient:
                 wait_time = 2 ** attempt  # Exponential backoff
                 print(f"[WARNING] Rate limit hit, waiting {wait_time}s before retry...")
                 time.sleep(wait_time)
+            except openai.AuthenticationError as e:
+                # Retrying a rejected key only wastes time. Raise ValueError so
+                # main.py reports it as a configuration problem rather than an
+                # unhandled traceback.
+                raise ValueError(
+                    "OpenRouter rejected the API key.\n"
+                    "Check OPENROUTER_API_KEY in .env, or create a key at "
+                    "https://openrouter.ai/keys"
+                ) from e
             except openai.NotFoundError as e:
                 # Handle 404 errors (data policy, model not found, etc.)
                 last_error = e

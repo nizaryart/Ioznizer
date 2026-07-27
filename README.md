@@ -193,51 +193,60 @@ check the claim.
 
 ## Install
 
-**Requirements:** Python 3.9+, GNU binutils (`readelf`, `objdump`, `strings`),
-and a decompiler.
-
 ```bash
 git clone https://github.com/nizaryart/Ioznizer.git
 cd Ioznizer
-python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
+./setup.sh
 ```
 
-### Ghidra (recommended)
+`setup.sh` checks your system tools, creates the virtual environment, installs
+the Python dependencies, finds any existing Ghidra or radare2 install, and
+prompts for your OpenRouter API key (input hidden, verified against the API,
+written to `.env` with mode `600`). It is idempotent — safe to re-run.
+
+```
+./setup.sh --check         report what is present, change nothing
+./setup.sh --with-ghidra   also download Ghidra (~1 GB, checksum verified)
+```
+
+**Requirements:** Python 3.9+ and GNU binutils (`readelf`, `objdump`,
+`strings`). `setup.sh` prints the right install command for your package
+manager if anything is missing.
+
+### Decompiler
+
+Ghidra is strongly recommended; radare2 is used automatically as a fallback,
+and without either the pipeline still runs on disassembly alone.
+
+If you already have Ghidra, `setup.sh` finds it via `GHIDRA_HOME`, `PATH`, or
+the usual locations. Otherwise `./setup.sh --with-ghidra` downloads the pinned
+release, verifies its SHA-256 against the checksum published by the NSA, and
+refuses to extract on a mismatch.
+
+Ghidra targets JDK 21. On a newer JDK, pin it:
 
 ```bash
-sudo apt install -y openjdk-21-jdk
-cd /opt
-sudo wget https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.1.2_build/ghidra_12.1.2_PUBLIC_20260605.zip
-echo "b62e81a0390618466c019c60d8c2f796ced2509c4c1aea4a37644a77272cf99d  ghidra_12.1.2_PUBLIC_20260605.zip" | sha256sum -c -
-sudo unzip -q ghidra_12.1.2_PUBLIC_20260605.zip
-export GHIDRA_HOME=/opt/ghidra_12.1.2_PUBLIC
+echo 'JAVA_HOME_OVERRIDE=/usr/lib/jvm/java-21-openjdk-amd64' \
+  >> "$GHIDRA_HOME/support/launch.properties"
 ```
-
-If Ghidra runs on a JDK other than 21, pin it:
-
-```bash
-echo 'JAVA_HOME_OVERRIDE=/usr/lib/jvm/java-21-openjdk-amd64' >> "$GHIDRA_HOME/support/launch.properties"
-```
-
-radare2 (`apt install radare2`) works as a fallback and is selected
-automatically if Ghidra is not found.
 
 ### API key
 
+`setup.sh` prompts for one. To set it later, or to change it, edit `.env`:
+
 ```bash
-cp .env.example .env      # then add your OpenRouter key
+OPENROUTER_API_KEY=sk-or-v1-...
 ```
 
-The key is read from the environment only — never committed, and redacted in
-logs.
+Free keys: [openrouter.ai/keys](https://openrouter.ai/keys). The key is read
+from the environment or `.env` only — never hardcoded, never committed
+(`.env` is gitignored), and redacted in logs.
 
 ## Usage
 
 ```bash
-./run.sh samples/your_sample.elf
-# or
-python3 main.py samples/your_sample.elf
+./run.sh samples/time                # benign control sample
+./run.sh samples/your_sample.elf     # your own binary
 ```
 
 Output:
@@ -313,6 +322,8 @@ before it informs a decision.
 ## Project layout
 
 ```
+setup.sh                    one-command environment setup and dependency check
+run.sh                      entry point; runs main.py inside the virtualenv
 main.py                     orchestrates extraction, analysis, reporting
 config.py                   environment-driven configuration
 backend/extractor.py        ELF validation, arch detection, static extraction
