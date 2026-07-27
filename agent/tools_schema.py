@@ -172,6 +172,66 @@ TOOLS_SCHEMA = [
     {
         "type": "function",
         "function": {
+            "name": "find_references",
+            "description": (
+                "Find which functions reference a string or an address. This is the "
+                "bridge from a lead to the code behind it: after search_strings finds "
+                "an interesting literal, use this to learn which function uses it, "
+                "then decompile_function to read what that function does. Also works "
+                "on a function address to find its callers."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "string": {
+                        "type": "string",
+                        "description": "Substring of the referenced string, e.g. '[syn_flood] started'"
+                    },
+                    "address": {
+                        "type": "string",
+                        "description": "Address in hex, e.g. '0x0804a330'. Returns functions referencing it."
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum matches to return (default: 20)",
+                        "default": 20
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_decompiled",
+            "description": (
+                "Search the decompiled pseudo-C for a pattern and return the matching "
+                "functions with the matching lines. Use this to find behaviour by the "
+                "calls it makes, e.g. 'socket', 'connect', 'kill', '/proc/'. Unlike "
+                "search_strings, which only covers extracted string literals, this "
+                "searches the actual reconstructed code."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Case-insensitive substring to find in the decompiled code"
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum matching functions to return (default: 15)",
+                        "default": 15
+                    }
+                },
+                "required": ["pattern"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "get_exports",
             "description": "List all exported functions. Useful for understanding what the binary exposes.",
             "parameters": {

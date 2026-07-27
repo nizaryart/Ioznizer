@@ -5,6 +5,7 @@ Runs binutils against an ELF sample and writes the raw artifacts that the
 analysis agent later queries through its tools.
 """
 
+import hashlib
 import subprocess
 from pathlib import Path
 import sys
@@ -55,8 +56,9 @@ class StaticExtractor:
         # Detect architecture
         self.architecture = self._detect_architecture()
 
-        # Populated by extract_decompilation()
+        # Populated by extract_decompilation() / compute_hashes()
         self.decompiler = None
+        self.hashes = None
 
     def _is_elf_file(self):
         """Check if file is a valid ELF file."""
@@ -175,9 +177,46 @@ class StaticExtractor:
                 f"{cmd[0]} failed (exit {e.returncode}): {detail or 'no output'}"
             )
 
+    def compute_hashes(self):
+        """
+        Hash the sample.
+
+        The report's IOC section is incomplete without these: a file hash is
+        the first indicator any analyst pivots on.
+        """
+        md5 = hashlib.md5()
+        sha1 = hashlib.sha1()
+        sha256 = hashlib.sha256()
+
+        with open(self.sample, "rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                md5.update(block)
+                sha1.update(block)
+                sha256.update(block)
+
+        self.hashes = {
+            "md5": md5.hexdigest(),
+            "sha1": sha1.hexdigest(),
+            "sha256": sha256.hexdigest(),
+            "size_bytes": self.sample.stat().st_size,
+        }
+        return self.hashes
+
     def extract_metadata(self):
-        """Extract ELF metadata using readelf."""
+        """Extract ELF metadata using readelf, prefixed with file identity."""
         output = self._run(["readelf", "-a", "-W", str(self.sample)])
+
+        hashes = self.hashes or self.compute_hashes()
+        header = (
+            "=== FILE IDENTITY ===\n"
+            f"filename : {self.sample.name}\n"
+            f"size     : {hashes['size_bytes']} bytes\n"
+            f"md5      : {hashes['md5']}\n"
+            f"sha1     : {hashes['sha1']}\n"
+            f"sha256   : {hashes['sha256']}\n\n"
+        )
+
+        output = header + output
         (self.out_dir / "metadata.txt").write_text(output)
         return output
 
@@ -289,6 +328,10 @@ class StaticExtractor:
         print(f"[+] Starting extraction for: {self.sample.name}")
         print(f"[+] Architecture detected: {self.architecture or 'unknown'}")
         print(f"[+] Output directory: {self.out_dir}")
+
+        print("[+] Hashing sample...")
+        self.compute_hashes()
+        print(f"    sha256: {self.hashes['sha256']}")
 
         print("[+] Extracting metadata...")
         self.extract_metadata()

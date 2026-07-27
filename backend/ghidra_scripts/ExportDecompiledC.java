@@ -13,13 +13,21 @@ import ghidra.app.script.GhidraScript;
 import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileOptions;
 import ghidra.app.decompiler.DecompileResults;
+import ghidra.program.model.address.Address;
+import ghidra.program.model.listing.Data;
+import ghidra.program.model.listing.DataIterator;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.FunctionIterator;
+import ghidra.program.model.symbol.Reference;
+import ghidra.program.model.symbol.ReferenceIterator;
+import ghidra.program.model.symbol.ReferenceManager;
 
 import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.PrintWriter;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 public class ExportDecompiledC extends GhidraScript {
 
@@ -93,5 +101,90 @@ public class ExportDecompiledC extends GhidraScript {
 
         println("ExportDecompiledC: exported=" + exported + " failed=" + failed
                 + " -> " + outFile.getAbsolutePath());
+
+        exportCrossReferences(new File(outFile.getAbsolutePath() + ".xrefs"));
+    }
+
+    /**
+     * Export cross-references as tab-separated records.
+     *
+     * This is the bridge between a lead and the code behind it: an analyst who
+     * finds an interesting string immediately asks which function references
+     * it. Without this the agent can only keep searching strings, because
+     * strings are the only thing it can search.
+     *
+     *   STRING <addr> <text>  <referencing functions>
+     *   FUNC   <addr> <name>  <calling functions>
+     */
+    private void exportCrossReferences(File xrefFile) throws Exception {
+        ReferenceManager refs = currentProgram.getReferenceManager();
+        PrintWriter writer = new PrintWriter(new BufferedWriter(new FileWriter(xrefFile)));
+
+        int strings = 0;
+        int functions = 0;
+
+        try {
+            writer.println("# type\taddress\tname\treferenced_by");
+
+            DataIterator data = currentProgram.getListing().getDefinedData(true);
+            while (data.hasNext() && !monitor.isCancelled()) {
+                Data item = data.next();
+                Object value = item.getValue();
+                if (!(value instanceof String)) {
+                    continue;
+                }
+
+                String callers = callersOf(refs, item.getAddress());
+                if (callers.isEmpty()) {
+                    continue;   // unreferenced string: no navigational value
+                }
+
+                writer.println("STRING\t0x" + item.getAddress() + "\t"
+                        + escape((String) value) + "\t" + callers);
+                strings++;
+            }
+
+            FunctionIterator funcs = currentProgram.getFunctionManager().getFunctions(true);
+            while (funcs.hasNext() && !monitor.isCancelled()) {
+                Function function = funcs.next();
+                String callers = callersOf(refs, function.getEntryPoint());
+                if (callers.isEmpty()) {
+                    continue;
+                }
+
+                writer.println("FUNC\t0x" + function.getEntryPoint() + "\t"
+                        + escape(function.getName()) + "\t" + callers);
+                functions++;
+            }
+        } finally {
+            writer.close();
+        }
+
+        println("ExportDecompiledC: xrefs strings=" + strings + " functions=" + functions
+                + " -> " + xrefFile.getAbsolutePath());
+    }
+
+    /** Comma-separated "name@0xaddr" for every function referencing target. */
+    private String callersOf(ReferenceManager refs, Address target) {
+        Set<String> callers = new LinkedHashSet<>();
+        ReferenceIterator it = refs.getReferencesTo(target);
+
+        while (it.hasNext()) {
+            Reference reference = it.next();
+            Function from = getFunctionContaining(reference.getFromAddress());
+            if (from != null) {
+                callers.add(from.getName() + "@0x" + from.getEntryPoint());
+            }
+        }
+
+        return String.join(",", callers);
+    }
+
+    /** Keep records on a single tab-delimited line. */
+    private String escape(String text) {
+        return text.replace("\\", "\\\\")
+                   .replace("\t", "\\t")
+                   .replace("\r", "\\r")
+                   .replace("\n", "\\n");
     }
 }

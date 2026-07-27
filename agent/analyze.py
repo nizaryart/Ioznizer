@@ -21,6 +21,16 @@ except ImportError:
     from agent.tools_schema import get_tools_schema
 
 
+# Tools that read actual code, as opposed to searching strings or metadata.
+# Used to detect a run that is collecting leads without ever verifying one.
+DEEP_TOOLS = {
+    "decompile_function",
+    "find_references",
+    "search_decompiled",
+    "disassemble_address",
+}
+
+
 class MalwareAnalyzer:
     """Main agent for analyzing malware samples using LLM."""
     
@@ -100,29 +110,46 @@ WORKFLOW:
 5. When you have a comprehensive understanding, provide your final analysis as structured JSON
 
 AVAILABLE TOOLS (use when you need more information):
+- search_strings: Find suspicious string literals
+- find_references: Find which functions reference a string or address
+- decompile_function: Get decompiled pseudo-C for one function
+- search_decompiled: Search the decompiled code itself (e.g. "socket", "kill")
 - list_functions: List functions recovered by the decompiler, with addresses
-- decompile_function: Get decompiled pseudo-C for one function (most informative tool)
-- read_section: Read specific sections from analysis files (metadata, strings, symbols, disasm, decomp)
 - disassemble_address: Get raw disassembly for specific addresses or functions
-- search_strings: Search for suspicious strings or patterns
+- read_section: Read analysis files (metadata, strings, symbols, disasm, decomp)
 - analyze_symbol: Get detailed information about symbols
 - get_imports: List imported functions and libraries
 - get_exports: List exported functions
 
-TOOL USAGE STRATEGY:
-- Work like a reverse engineer: find a lead, then read the code behind it
-- Prefer decompile_function over disassemble_address. Pseudo-C already resolves
-  library calls, control flow and string references, so it yields far more
-  reliable conclusions than reading raw instructions
-- A typical investigation: search_strings finds a suspicious literal ->
-  list_functions or the disassembly locates the function referencing it ->
-  decompile_function reveals what that function actually does
+THE CORE INVESTIGATION LOOP - follow this, do not stop at step 1:
+
+  1. search_strings("flood")          find a lead
+  2. find_references("[syn_flood]")   learn WHICH function uses it
+  3. decompile_function("FUN_...")    read what that function actually DOES
+  4. repeat for each distinct behaviour
+
+Finding a string only tells you a string exists. It does NOT tell you what the
+binary does with it. A report built solely from string matches is weak evidence
+and will be treated as incomplete. You must open the code behind your leads.
+
+search_decompiled is the other entry point: search for the calls a behaviour
+implies ("socket", "connect", "kill", "/proc/") to find the functions
+implementing it directly.
+
+RULES:
+- Do not issue more than 3 consecutive search_strings calls without following a
+  lead into the code with find_references or decompile_function
+- Every entry in malicious_behaviors MUST have evidence_location set to a
+  function name and address (e.g. "FUN_0804a330 @ 0x0804a330"). Do not put a
+  bare string match there - that is a lead, not evidence
 - Stripped binaries have synthetic names such as FUN_0804a330; this is normal,
   and you should still decompile them
-- Cite concrete evidence (function name, address) for every behaviour you report
-- Use tools efficiently - avoid redundant queries
+- Prefer decompile_function over disassemble_address: pseudo-C already resolves
+  library calls, control flow and string references
+- Avoid redundant queries; vary your approach rather than repeating searches
 - Extract ALL key findings from tool results into structured fields
 - Never leave arrays empty when findings are confirmed
+- Report the sample's SHA-256 (given in the metadata section) in the IOCs
 
 FINAL OUTPUT FORMAT:
 When you have completed your analysis, you MUST provide a valid JSON object with this exact structure:
@@ -370,6 +397,7 @@ Extract ALL findings from tool results. Never leave arrays empty when findings a
         # iteration on tool calls and never be asked for its verdict, which
         # yields a run that did useful investigation but reported nothing.
         consecutive_empty = 0
+        consecutive_shallow = 0
         seen_tool_calls = set()
         forced_final = False
 
@@ -506,7 +534,28 @@ Extract ALL findings from tool results. Never leave arrays empty when findings a
                             "content": tool_response
                         })
                         print(f"  [✓] Tool {tool_name} completed")
-                    
+
+                    # Enforce the investigation loop. Searching strings finds
+                    # leads; only opening the code turns a lead into evidence.
+                    # Left unchecked, a run can spend every iteration on string
+                    # searches and report nothing it actually verified.
+                    called = {tc["function"]["name"] for tc in tool_calls}
+                    if called & DEEP_TOOLS:
+                        consecutive_shallow = 0
+                    else:
+                        consecutive_shallow += 1
+
+                    if consecutive_shallow >= 3 and tool_messages:
+                        tool_messages[-1]["content"] += (
+                            "\n\nNOTE: you have made several consecutive string/metadata "
+                            "searches without opening any code. Strings are leads, not "
+                            "evidence. Use find_references on your most promising string "
+                            "to locate the function that uses it, then decompile_function "
+                            "to read what it does."
+                        )
+                        print("  [!] Nudging agent to follow leads into the code")
+                        consecutive_shallow = 0
+
                     # Add assistant message with tool calls (preserve reasoning_details)
                     if "reasoning_details" in assistant_msg:
                         # Keep reasoning_details when adding tool calls

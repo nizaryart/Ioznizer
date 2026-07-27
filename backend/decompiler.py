@@ -178,7 +178,14 @@ class GhidraBackend(DecompilerBackend):
 
             output = staged_out.read_text(errors="ignore")
 
+            # Cross-references are exported alongside the pseudo-C by the same
+            # Ghidra run; they back the find_references tool.
+            staged_xrefs = Path(str(staged_out) + ".xrefs")
+            xrefs = staged_xrefs.read_text(errors="ignore") if staged_xrefs.exists() else None
+
         out_file.write_text(output)
+        if xrefs is not None:
+            (out_file.parent / "xrefs.txt").write_text(xrefs)
         return output
 
 

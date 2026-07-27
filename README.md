@@ -21,8 +21,8 @@ Ioznizer inverts that. The model gets a compact overview and then **asks for wha
 it needs**, one question at a time:
 
 ```
-search_strings("syn_flood")     → 4 hits in .rodata
-list_functions()                → 267 functions recovered
+search_strings("syn_flood")             → "[syn_flood] started: ('%d')"
+find_references("[syn_flood] started")  → FUN_0804a330 @ 0x0804a330
 decompile_function("FUN_0804a330")
 
     uVar3 = FUN_08059d98();
@@ -31,6 +31,11 @@ decompile_function("FUN_0804a330")
     if (iVar4 == -1) {
       FUN_0805a2e1("[syn_flood] socket() failed");
 ```
+
+The middle step is what makes this work. A string tells you a literal exists;
+the cross-reference tells you which function *uses* it. Without that bridge an
+agent can only keep searching strings, and every finding it reports is a guess
+about code it never read.
 
 A raw TCP socket built for SYN flooding — read directly from decompiled code, in
 a stripped binary with no symbols. This is hypothesis-driven investigation, and
@@ -50,7 +55,7 @@ flowchart LR
     B --> D[(analysis/)]
     C --> D
     D --> E{Agent loop}
-    E -->|tool call| F[Tool dispatcher<br/>8 tools]
+    E -->|tool call| F[Tool dispatcher<br/>10 tools]
     F -->|evidence| E
     E -->|final JSON| G[Report generator]
     G --> H[report.json + report.md]
@@ -76,11 +81,13 @@ parses as a schema-valid report.
 
 | Tool | Purpose |
 |---|---|
-| `list_functions` | Every function recovered by the decompiler, with entry points |
+| `search_strings` | Case-insensitive pattern search across extracted strings |
+| `find_references` | Which functions reference a string or address — the lead-to-code bridge |
 | `decompile_function` | Pseudo-C for one function, by name or address |
+| `search_decompiled` | Search the reconstructed code itself, e.g. `socket`, `kill`, `/proc/` |
+| `list_functions` | Every function recovered by the decompiler, with entry points |
 | `disassemble_address` | Raw disassembly at an address, range or symbol |
 | `read_section` | Paged reads of metadata / strings / symbols / disasm / decomp |
-| `search_strings` | Case-insensitive pattern search across extracted strings |
 | `analyze_symbol` | Full symbol-table detail for one symbol |
 | `get_imports` | Undefined symbols plus `DT_NEEDED` shared libraries |
 | `get_exports` | Symbols the binary itself defines |
@@ -96,22 +103,32 @@ different one.
 
 ### Sample A — stripped 32-bit ELF, unknown provenance
 
-Ghidra recovered **267 functions with zero decompilation failures**. The full
-run — extraction, decompilation, 13 agent iterations and report generation —
-took **3m55s**.
+Ghidra recovered **267 functions with zero decompilation failures**.
 
 ```
-classification : DDoS Botnet
+classification : DDoS bot
 risk           : Critical  (95/100)
 binary         : i386, statically linked, imports: []
-behaviours     : 10, each with an evidence location and confidence level
+sha256         : 7fe9b559e58af2bc4b453a5bcdbdfef0b2d527bdc3416ee801613ac1734baa03
 ```
 
-What it recovered from a binary with no symbols:
+The agent worked through six flood routines, each one located by
+cross-reference and confirmed by reading its decompiled body:
 
-- **Seven flood primitives** — UDP, UDP-plain, UDP-bypass, TCP SYN, TCP-bypass,
-  ICMP, and ACK/PSH-ACK, each tied to its `.rodata` marker and socket setup.
-  SYN flooding uses raw sockets with `IP_HDRINCL`.
+```
+Network Denial of Service - SYN flood      @ FUN_0804a330 @ 0x0804a330
+Network Denial of Service - UDP flood      @ FUN_08049ad0 @ 0x08049ad0
+Network Denial of Service - ICMP flood     @ FUN_08055fd0 @ 0x08055fd0
+Network Denial of Service - TCP bypass     @ FUN_08049ff0 @ 0x08049ff0
+Network Denial of Service - PSH-ACK flood  @ FUN_08056210 @ 0x08056210
+Network Denial of Service - ACK flood      @ FUN_08056520 @ 0x08056520
+```
+
+Each finding points at a function and address, so any of them can be checked
+against the binary directly.
+
+What else it recovered from a binary with no symbols:
+
 - **Hardcoded C2 — `154.6.197.37`** — plus a custom control protocol,
   `SNQUERY: <ip>:<password>:<identifier>`.
 - **Reconnaissance** — SSDP `M-SEARCH` to `255.255.255.255:1900` and DIAL

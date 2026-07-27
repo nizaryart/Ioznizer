@@ -126,6 +126,17 @@ class ToolDispatcher:
                     arguments.get("pattern"),
                     arguments.get("max_results", 100)
                 )
+            elif tool_name == "find_references":
+                result = self._find_references(
+                    arguments.get("string"),
+                    arguments.get("address"),
+                    arguments.get("max_results", 20)
+                )
+            elif tool_name == "search_decompiled":
+                result = self._search_decompiled(
+                    arguments.get("pattern"),
+                    arguments.get("max_results", 15)
+                )
             else:
                 return {
                     "success": False,
@@ -700,6 +711,137 @@ class ToolDispatcher:
             "total_functions": len(functions),
             "truncated": total > len(selected),
             "filter": {"pattern": pattern},
+        }
+
+    def _find_references(self, string: Optional[str] = None,
+                        address: Optional[str] = None,
+                        max_results: int = 20) -> Dict[str, Any]:
+        """
+        Resolve a string or address to the functions that reference it.
+
+        Reads xrefs.txt, exported by the decompiler backend as tab-separated
+        records: type, address, name, comma-separated referencing functions.
+        """
+        if not string and not address:
+            return {
+                "success": False,
+                "error": "Either string or address must be provided",
+                "result": None
+            }
+
+        xref_file = self.analysis_dir / "xrefs.txt"
+        if not xref_file.exists():
+            return {
+                "success": False,
+                "error": (
+                    "No cross-reference data available. It is produced by the Ghidra "
+                    "backend; if decompilation was skipped, use search_strings and "
+                    "disassemble_address instead."
+                ),
+                "result": None
+            }
+
+        want_addr = None
+        if address:
+            try:
+                want_addr = int(address, 16)
+            except (TypeError, ValueError):
+                want_addr = None
+
+        needle = string.lower() if string else None
+        matches = []
+
+        for line in xref_file.read_text(errors="ignore").split("\n"):
+            if not line or line.startswith("#"):
+                continue
+
+            parts = line.split("\t")
+            if len(parts) < 4:
+                continue
+
+            kind, addr, name, callers = parts[0], parts[1], parts[2], parts[3]
+
+            if needle is not None:
+                if needle not in name.lower():
+                    continue
+            else:
+                try:
+                    if int(addr, 16) != want_addr:
+                        continue
+                except (TypeError, ValueError):
+                    continue
+
+            matches.append({
+                "type": kind,
+                "address": addr,
+                "name": name,
+                "referenced_by": [c for c in callers.split(",") if c],
+            })
+
+        if not matches:
+            return {
+                "success": True,
+                "result": [],
+                "count": 0,
+                "note": (
+                    "No cross-references found. The string may be unreferenced, or "
+                    "built at runtime rather than stored as a literal."
+                ),
+            }
+
+        total = len(matches)
+        return {
+            "success": True,
+            "result": matches[:max_results],
+            "count": min(total, max_results),
+            "total_found": total,
+            "truncated": total > max_results,
+        }
+
+    def _search_decompiled(self, pattern: str, max_results: int = 15) -> Dict[str, Any]:
+        """Search the decompiled pseudo-C, grouping hits by function."""
+        if not pattern:
+            return {
+                "success": False,
+                "error": "A search pattern is required",
+                "result": None
+            }
+
+        functions = self._decompiled_functions()
+        if not functions:
+            return {
+                "success": False,
+                "error": f"No decompiled code available. {self._decompiler_unavailable_reason()}",
+                "result": None
+            }
+
+        needle = pattern.lower()
+        hits = []
+
+        for func in functions:
+            lines = [
+                line.strip()
+                for line in func["code"].split("\n")
+                if needle in line.lower()
+            ]
+            if lines:
+                hits.append({
+                    "function": func["name"],
+                    "address": func["address"],
+                    "match_count": len(lines),
+                    "matches": lines[:5],
+                })
+
+        hits.sort(key=lambda h: -h["match_count"])
+        total = len(hits)
+
+        return {
+            "success": True,
+            "result": hits[:max_results],
+            "pattern": pattern,
+            "count": min(total, max_results),
+            "total_found": total,
+            "truncated": total > max_results,
         }
 
     def get_tool_log(self) -> List[Dict[str, Any]]:

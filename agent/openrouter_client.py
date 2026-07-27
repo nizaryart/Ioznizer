@@ -99,7 +99,32 @@ class OpenRouterClient:
         for attempt in range(max_retries):
             try:
                 response = self.client.chat.completions.create(**params)
-                
+
+                # OpenRouter answers HTTP 200 with an error payload when an
+                # upstream provider fails (capacity exhaustion, model errors).
+                # The SDK does not raise for that, it just leaves `choices`
+                # empty, so it has to be detected here. Without this a single
+                # transient provider hiccup discards an entire analysis run.
+                if not getattr(response, "choices", None):
+                    detail = ""
+                    error_field = getattr(response, "error", None)
+                    if error_field:
+                        detail = str(error_field)[:200]
+
+                    last_error = RuntimeError(
+                        f"Provider returned no choices: {detail or 'empty response'}"
+                    )
+
+                    if attempt < max_retries - 1:
+                        wait_time = 2 ** attempt
+                        print(f"[WARNING] Empty response from provider"
+                              f"{f' ({detail})' if detail else ''}; "
+                              f"retrying in {wait_time}s...")
+                        time.sleep(wait_time)
+                        continue
+
+                    raise last_error
+
                 # Convert response to dict format
                 result = {
                     "id": response.id,
