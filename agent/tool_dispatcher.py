@@ -33,7 +33,7 @@ _NEEDED_LIB = re.compile(r"\(NEEDED\).*\[(?P<lib>[^\]]+)\]")
 
 # Function boundary marker written into decomp.txt by the decompiler backends.
 # Must stay in sync with FUNCTION_MARKER in backend/decompiler.py.
-_DECOMP_FUNC_MARKER = re.compile(
+DECOMP_FUNC_MARKER = re.compile(
     r"^//\s*=====\s*FUNCTION\s+(?P<name>.+?)\s+@\s+(?P<address>\S+)\s*=====\s*$",
     re.MULTILINE,
 )
@@ -589,7 +589,7 @@ class ToolDispatcher:
             return []
 
         content = decomp_file.read_text(errors="ignore")
-        markers = list(_DECOMP_FUNC_MARKER.finditer(content))
+        markers = list(DECOMP_FUNC_MARKER.finditer(content))
 
         functions = []
         for i, match in enumerate(markers):

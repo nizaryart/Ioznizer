@@ -34,3 +34,10 @@ samples/*.bin
 
 # Locally installed Ghidra (setup.sh --with-ghidra)
 ghidra/
+
+# Generated YARA rules
+reports/*.yar
+
+# Benchmark control binaries (built by benchmark/Makefile)
+benchmark/samples/
+benchmark/results*.json

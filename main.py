@@ -54,7 +54,11 @@ def main():
         # Collect extractor info for report
         extractor_info = {
             "architecture": extractor.architecture,
-            "output_directory": str(extractor.out_dir)
+            "output_directory": str(extractor.out_dir),
+            "decompiler": extractor.decompiler,
+            # Computed locally, so the report never has to trust the model
+            # to reproduce them correctly.
+            "hashes": extractor.hashes,
         }
         print()
         
@@ -130,8 +134,10 @@ def main():
                 extractor_info=extractor_info
             )
             print(f"[+] Reports generated:")
-            print(f"    JSON: {report_paths['json']}")
+            print(f"    JSON:     {report_paths['json']}")
             print(f"    Markdown: {report_paths['markdown']}")
+            if report_paths.get("yara"):
+                print(f"    YARA:     {report_paths['yara']}")
         except Exception as e:
             print(f"[ERROR] Report generation failed: {e}")
             import traceback

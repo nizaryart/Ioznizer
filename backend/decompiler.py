@@ -110,11 +110,20 @@ class GhidraBackend(DecompilerBackend):
         if on_path:
             return Path(on_path)
 
-        # Distribution packages (e.g. Kali) relocate the support scripts.
-        for candidate in (
-            Path("/usr/share/ghidra/support/analyzeHeadless"),
-            Path("/opt/ghidra/support/analyzeHeadless"),
-        ):
+        # Installations are usually version-suffixed (ghidra_12.1.2_PUBLIC), so
+        # the well-known locations have to be globbed rather than matched
+        # literally; distribution packages (e.g. Kali) also relocate the
+        # support scripts under /usr/share.
+        candidates = [Path("/usr/share/ghidra/support/analyzeHeadless")]
+        for root in (Path("/opt"), Path.home()):
+            try:
+                candidates.extend(
+                    sorted(root.glob("ghidra*/support/analyzeHeadless"), reverse=True)
+                )
+            except OSError:
+                continue
+
+        for candidate in candidates:
             if candidate.is_file():
                 return candidate
 
