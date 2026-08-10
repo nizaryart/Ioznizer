@@ -1,0 +1,76 @@
+{
+  "_comment": [
+    "Benchmark cases. Each entry states what a correct analysis must and must",
+    "not conclude, so results are scored rather than eyeballed.",
+    "",
+    "The benign controls are deliberately suspicious-looking: they call socket(),",
+    "read /proc/net/tcp and XOR file contents. Flagging them as malicious means",
+    "the analyser is pattern-matching on API calls instead of reading behaviour,",
+    "which is the failure mode that makes a triage tool useless in practice.",
+    "",
+    "Malicious samples are referenced by SHA-256 and are not distributed. Place",
+    "the file at the given path to include the case; missing files are skipped."
+  ],
+
+  "cases": [
+    {
+      "name": "ddos-bot",
+      "path": "samples/Malware.elf",
+      "sha256": "7fe9b559e58af2bc4b453a5bcdbdfef0b2d527bdc3416ee801613ac1734baa03",
+      "label": "malicious",
+      "notes": "Stripped static i386 DDoS bot with multiple flood primitives and a hardcoded C2.",
+      "expect": {
+        "risk_min": 70,
+        "classification_any": ["ddos", "flood", "bot", "botnet"],
+        "classification_none": ["benign", "utility", "clean"],
+        "min_behaviours": 3,
+        "iocs_include_ips": ["154.6.197.37"],
+        "capabilities_any": ["flood", "syn", "udp", "icmp"]
+      }
+    },
+    {
+      "name": "benign-file-shuffler",
+      "path": "samples/time",
+      "label": "benign",
+      "notes": "Reads a file and shuffles its bytes. No network, no persistence.",
+      "expect": {
+        "risk_max": 35,
+        "classification_none": ["ddos", "backdoor", "trojan", "ransomware", "bot"],
+        "max_behaviours": 0
+      }
+    },
+    {
+      "name": "benign-net-client",
+      "path": "benchmark/samples/netclient",
+      "label": "benign",
+      "notes": "TCP client with a hardcoded address. Same primitives as a backdoor, benign intent.",
+      "expect": {
+        "risk_max": 45,
+        "classification_none": ["backdoor", "trojan", "rat", "bot", "ddos", "c2", "beacon", "implant"],
+        "max_behaviours": 0
+      }
+    },
+    {
+      "name": "benign-proc-reader",
+      "path": "benchmark/samples/procreader",
+      "label": "benign",
+      "notes": "Lists TCP connections and counts processes, like ss or ps.",
+      "expect": {
+        "risk_max": 45,
+        "classification_none": ["backdoor", "trojan", "rootkit", "bot", "spyware", "c2", "recon"],
+        "max_behaviours": 0
+      }
+    },
+    {
+      "name": "benign-xor-tool",
+      "path": "benchmark/samples/xorfile",
+      "label": "benign",
+      "notes": "XOR obfuscator. Same loop shape as ransomware, no enumeration or ransom note.",
+      "expect": {
+        "risk_max": 45,
+        "classification_none": ["ransomware", "trojan", "wiper", "cryptor"],
+        "max_behaviours": 0
+      }
+    }
+  ]
+}

@@ -33,7 +33,7 @@ class Config:
     
     # Analysis settings
     MAX_ANALYSIS_ITERATIONS: int = int(os.getenv("MAX_ANALYSIS_ITERATIONS", "20"))
-    LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.7"))
+    LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.15"))
     # The final report is a large JSON document; a low ceiling truncates it
     # mid-object and the whole analysis is lost to a parse error.
     LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "16000"))

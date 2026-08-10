@@ -36,7 +36,7 @@ class MalwareAnalyzer:
     
     def __init__(self, analysis_dir: Path, api_key: Optional[str] = None,
                  model: str = "nvidia/nemotron-3-ultra-550b-a55b:free",
-                 temperature: float = 0.7, max_tokens: int = 16000):
+                 temperature: float = 0.15, max_tokens: int = 16000):
         """
         Initialize the malware analyzer.
 
@@ -98,7 +98,11 @@ class MalwareAnalyzer:
     
     def _create_system_prompt(self) -> str:
         """Create the system prompt for malware analysis."""
-        return """You are a professional malware analysis assistant with expertise in ELF binary analysis and threat intelligence reporting.
+        return """You are a binary triage analyst with expertise in ELF analysis and threat intelligence reporting.
+
+Your job is to determine WHETHER a binary is malicious, not to assume that it is.
+Many samples submitted for triage turn out to be ordinary software, and correctly
+clearing them matters as much as catching the malicious ones.
 
 CRITICAL REQUIREMENT: Your final analysis MUST be provided as a valid JSON object matching the exact structure specified below.
 
@@ -148,15 +152,38 @@ RULES:
   library calls, control flow and string references
 - Avoid redundant queries; vary your approach rather than repeating searches
 - Extract ALL key findings from tool results into structured fields
-- Never leave arrays empty when findings are confirmed
 - Report the sample's SHA-256 (given in the metadata section) in the IOCs
+
+BENIGN SAMPLES:
+Ordinary programs use the same system calls as malware. A network client calls
+socket() and connect(); a process monitor reads /proc; an archiver transforms
+file contents in a loop. None of that is malicious on its own.
+
+An entry belongs in malicious_behaviors only if it would be malicious
+REGARDLESS of context - packet flooding, credential theft, persistence
+installation, anti-analysis, C2 command handling. Ask: "would a legitimate
+program plausibly do this?" If yes, it is not a malicious behaviour.
+
+Specifically:
+- Connecting to a hardcoded address is not C2. C2 means receiving and acting on
+  commands. A one-shot HTTP request to a fixed endpoint is an ordinary client
+- Reading /proc is not reconnaissance. Every process monitor does it
+- Transforming file bytes is not ransomware. Ransomware enumerates a
+  filesystem, destroys recovery options and demands payment
+- Being statically linked or stripped is not evasion by itself
+
+When the evidence shows ordinary software: say so plainly. Set classification
+to what the program IS (e.g. "Benign - network client"), risk_level to Low, and
+malicious_behaviors to an EMPTY array. Do not pad the report with neutral
+observations reframed as threats. A false positive costs an analyst just as
+much as a miss.
 
 FINAL OUTPUT FORMAT:
 When you have completed your analysis, you MUST provide a valid JSON object with this exact structure:
 
 {
   "executive_summary": {
-    "classification": "string (e.g., DDoS bot, Backdoor, Downloader)",
+    "classification": "string - what the program IS (e.g., DDoS bot, Backdoor, Downloader, or Benign - network client)",
     "key_capabilities": ["capability1", "capability2", "capability3"],
     "risk_level": "Low|Medium|High|Critical",
     "risk_score": 1-100,
@@ -385,7 +412,9 @@ After your comprehensive analysis, provide your findings as a structured JSON ob
 - threat_intelligence (mitre_attack_techniques, threat_actor_affiliation)
 - recommendations (detection, mitigation, further_analysis)
 
-Extract ALL findings from tool results. Never leave arrays empty when findings are confirmed."""
+Extract ALL findings from tool results into the structured fields. If the
+binary is ordinary software, report it as benign with an empty
+malicious_behaviors array rather than reframing normal operations as threats."""
         }
         
         self.conversation_history = [system_message, initial_message]
@@ -676,7 +705,7 @@ Extract ALL findings from tool results. Never leave arrays empty when findings a
 def analyze_sample(analysis_dir: Path, api_key: Optional[str] = None,
                   model: str = "nvidia/nemotron-3-ultra-550b-a55b:free",
                   max_iterations: int = 20,
-                  temperature: float = 0.7,
+                  temperature: float = 0.15,
                   max_tokens: int = 16000) -> Dict[str, Any]:
     """
     Analyze a malware sample.

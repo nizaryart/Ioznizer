@@ -4,7 +4,9 @@ Supports nvidia/nemotron-3-ultra-550b-a55b:free model via OpenRouter.
 """
 
 import os
+import re
 import time
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 import openai
 from openai import OpenAI
@@ -54,7 +56,7 @@ class OpenRouterClient:
         messages: List[Dict[str, str]],
         tools: Optional[List[Dict]] = None,
         tool_choice: Optional[str] = None,
-        temperature: float = 0.7,
+        temperature: float = 0.15,
         max_tokens: Optional[int] = None,
         max_retries: int = 3,
         enable_reasoning: bool = True
@@ -176,6 +178,35 @@ class OpenRouterClient:
                 
             except openai.RateLimitError as e:
                 last_error = e
+                detail = str(e)
+
+                # A daily quota is not a transient condition: retrying it on a
+                # seconds-scale backoff burns time and still fails. Detect it
+                # and stop immediately with something the user can act on.
+                if "free-models-per-day" in detail or "per-day" in detail:
+                    reset_hint = ""
+                    match = re.search(r"'X-RateLimit-Reset':\s*'(\d+)'", detail)
+                    if match:
+                        try:
+                            reset = datetime.fromtimestamp(
+                                int(match.group(1)) / 1000, timezone.utc
+                            )
+                            hours = (reset - datetime.now(timezone.utc)).total_seconds() / 3600
+                            reset_hint = (
+                                f"\nQuota resets at {reset:%Y-%m-%d %H:%M} UTC "
+                                f"(in {hours:.1f} hours)."
+                            )
+                        except (ValueError, OverflowError):
+                            pass
+
+                    raise ValueError(
+                        "OpenRouter daily free-model quota exhausted."
+                        f"{reset_hint}\n"
+                        "Options: wait for the reset, add credits at "
+                        "https://openrouter.ai/settings/credits, or set "
+                        "OPENROUTER_MODEL to a paid model."
+                    ) from e
+
                 wait_time = 2 ** attempt  # Exponential backoff
                 print(f"[WARNING] Rate limit hit, waiting {wait_time}s before retry...")
                 time.sleep(wait_time)
