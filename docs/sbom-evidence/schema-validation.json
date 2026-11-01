@@ -1,0 +1,12 @@
+{
+  "runtime.cdx.json": {
+    "schema": "CycloneDX 1.4 official schema via cyclonedx-python-lib",
+    "valid": true,
+    "sha256": "219624f4cbaef62e7c8459d33fd40d45e528fcf15778fc044dece5b5e75ea098"
+  },
+  "negative-control.cdx.json": {
+    "schema": "CycloneDX 1.4 official schema via cyclonedx-python-lib",
+    "valid": true,
+    "sha256": "b63c22c9566be0c28f3391f60d75a8375bf1588cebe1336482ee224d7800a80d"
+  }
+}

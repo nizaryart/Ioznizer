@@ -1,0 +1,2 @@
+# Uninstalled historical vulnerable fixture; never used by the application.
+Jinja2==2.10.1
